@@ -1,0 +1,18 @@
+# ---- ビルド生成物 ----
+*.o
+*.a
+common/bp_selftest
+history_length/hist_bench
+table_structure/table_bench
+
+# ---- 計画・仕様・ノート類は追跡しない ----
+# git 管理はコードと測定結果のみとする。
+# docs/ 配下（研究計画・実装仕様・測定手順・実験ノート）はローカルに置く。
+docs/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+
+# ---- 測定結果は追跡する ----
+# results/ 配下の *.csv と *.meta.txt は意図的に無視しない。
