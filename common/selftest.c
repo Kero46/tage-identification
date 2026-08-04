@@ -174,6 +174,157 @@ int bp_selftest(void) {
         }
     }
 
+    printf("== 雑音注入 ctxnoise: 構造と m=0 の等価性 ==\n");
+    // ブロック = [雑音 m][識別ビット 1][共通サフィックス D-1][標的]
+    //   距離 1..D-1 共通サフィックス（情報を持たない）
+    //   距離 D      識別ビット（標的を決める）
+    //   距離 D+1..D+m 雑音（独立乱数）
+    // **m=0 は bp_gen_hist_ctx(D, K=2) と同じ構造**になる。これが枠組みの回帰検査の
+    // 土台なので、構造を機械的に固定する（仕様 §4.1）。
+    {
+        int ng = 0;
+        unsigned Ds[] = {5, 15, 31};
+        unsigned Ms[] = {0, 4, 20};
+        for (unsigned di = 0; di < 3; di++) {
+            for (unsigned mi = 0; mi < 3; mi++) {
+                unsigned D = Ds[di], m = Ms[mi];
+                size_t blk = (size_t)m + D + 1;
+                bp_seed(12345);
+                bp_gen_ctx_noise(pat, n, D, m, 0);
+
+                // (1) 標的 = 距離 D のビットで決まる（文脈 2 通り、値は 0/1 で均衡）
+                int seen[2] = {0, 0}, tv[2] = {-1, -1};
+                for (size_t i = 0; i + blk <= n; i += blk) {
+                    unsigned k = pat[i + m];              // 識別ビット
+                    unsigned t = pat[i + m + D];          // 標的
+                    if (k > 1) { ng = 1; break; }
+                    if (tv[k] < 0) tv[k] = (int)t;
+                    else if (tv[k] != (int)t) {
+                        printf("   NG D=%u m=%u: 同じ識別ビットで標的が違う\n", D, m);
+                        ng = 1; break;
+                    }
+                    seen[k]++;
+                }
+                if (tv[0] < 0 || tv[1] < 0) {
+                    printf("   NG D=%u m=%u: 文脈が 2 通り現れない\n", D, m);
+                    ng = 1;
+                } else if (tv[0] == tv[1]) {
+                    printf("   NG D=%u m=%u: 標的値が縮退している\n", D, m);
+                    ng = 1;
+                }
+
+                // (2) 共通サフィックスが全ブロックで同一（近傍に情報が無いこと）
+                for (size_t i = blk; i + blk <= n && !bad; i += blk)
+                    for (unsigned b = 0; b < D - 1; b++)
+                        if (pat[i + m + 1 + b] != pat[m + 1 + b]) {
+                            printf("   NG D=%u m=%u: サフィックスがブロック間で違う\n",
+                                   D, m);
+                            ng = 1; break;
+                        }
+
+                // (3) 雑音が独立（成立率が 0.5 付近。m=0 では検査しない）
+                if (m >= 8 && !bad) {
+                    size_t ones = 0, tot = 0;
+                    for (size_t i = 0; i + blk <= n; i += blk)
+                        for (unsigned b = 0; b < m; b++) { ones += pat[i + b]; tot++; }
+                    double r = (double)ones / (double)tot;
+                    if (r < 0.45 || r > 0.55) {
+                        printf("   NG D=%u m=%u: 雑音の成立率が %.3f\n", D, m, r);
+                        ng = 1;
+                    }
+                }
+            }
+        }
+        // (4) **m=0 は ctx K=2 と同じ構造**: どちらも「標的 = 距離 D のビット、
+        //     距離 1..D-1 は全ブロック共通」。ブロック長も D+1 で一致する。
+        {
+            unsigned D = 15;
+            bp_seed(777); bp_gen_ctx_noise(pat, n, D, 0, 0);
+            size_t agree = 0, tot = 0;
+            for (size_t i = 0; i + D + 1 <= n; i += D + 1) {
+                if (pat[i + D] == pat[i]) agree++;      // 標的 == 距離 D のビット?
+                tot++;
+            }
+            // tgt[k] は k か !k のどちらかなので、一致率は 1.0 か 0.0 になる
+            if (!(agree == tot || agree == 0)) {
+                printf("   NG m=0: 標的が距離 D のビットで決まっていない"
+                       "（一致 %zu/%zu）\n", agree, tot);
+                ng = 1;
+            }
+        }
+        // (5) test と control で成立率が一致（差分法の前提。§1.9）
+        for (unsigned mi = 0; mi < 3; mi++) {
+            unsigned D = 15, m = Ms[mi];
+            double rate[2];
+            for (int ctl = 0; ctl < 2; ctl++) {
+                bp_seed(4242);
+                bp_gen_ctx_noise(pat, n, D, m, ctl);
+                size_t ones = 0;
+                for (size_t i = 0; i < n; i++) ones += pat[i];
+                rate[ctl] = (double)ones / (double)n;
+            }
+            double d = rate[0] - rate[1];
+            if (d < -0.01 || d > 0.01) {
+                printf("   NG D=15 m=%u: 成立率が test %.4f / control %.4f "
+                       "（差 %+.4f、許容 0.010）\n", m, rate[0], rate[1], d);
+                ng = 1;
+            }
+        }
+        if (ng) { printf("FAIL: ctxnoise の構造\n"); return 1; }
+        printf("   OK  標的は距離 D で決まり、サフィックスは共通、雑音は独立、\n");
+        printf("       m=0 は ctx K=2 と同構造、test/control の成立率も一致\n");
+    }
+
+    printf("== 雑音注入 ctxnoise: 近傍の窓では標的が決まらない ==\n");
+    // 距離 1..D-1 は全ブロック共通なので、その長さの窓では標的が決まらない。
+    // 検出力（同一窓ペア数）を実行時に検査する（落とし穴 7）。
+    {
+        unsigned D = 31, m = 20;
+        size_t blk = (size_t)m + D + 1;
+        bp_seed(31337);
+        bp_gen_ctx_noise(pat, n, D, m, 0);
+        size_t ntp = 0;
+        for (size_t i = m + D; i + 1 <= n && ntp < 4000; i += blk) tp[ntp++] = i;
+        require_ambiguous("ctxnoise D=31 m=20（近傍 D-1）", pat, tp, ntp, D - 1);
+    }
+
+    printf("== 文脈数制限 ctx: 表現できない K の上限 ==\n");
+    // 識別ビット j=log2(K) は標的から見て距離 D..D-j+1 に置くので j <= D-1 が
+    // 必要、すなわち K <= 2^(D-1)。
+    //
+    // **これを検証していなかったため、生成器が範囲外の K で黙って純ランダム系列を
+    // 返していた。** K 掃引すると上限を超えた点で diff が 0 に落ちるので
+    // 「容量の限界」に見える（実測で D=5, K=32 の test_ns が純ランダムの飽和値
+    // 3.38 になった）。現在は CLI が拒否し、生成器も abort する。
+    // ここでは上限の計算そのものを固定する（CLI の拒否は env/verify_cli_reject.sh）。
+    {
+        struct { unsigned D, kmax; } cases[] = {
+            {1, 0},          // 識別ビットを置けない
+            {2, 2}, {3, 4}, {5, 16}, {9, 256}, {15, 16384}, {66, 0},
+        };
+        int ng = 0;
+        for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            unsigned D = cases[i].D, want = cases[i].kmax;
+            if (D == 66) want = 1u << 31;      // 上限は 2^31 で飽和させている
+            unsigned got = bp_ctx_max_k(D);
+            if (got != want) {
+                printf("   NG D=%u: bp_ctx_max_k=%u（期待 %u）\n", D, got, want);
+                ng = 1;
+            }
+        }
+        // 有効域の端（K = 2^(D-1)）は生成できなければならない。
+        bp_gen_hist_ctx(pat, n, 5, 16, 0);
+        size_t ones = 0;
+        for (size_t i = 0; i < n; i++) ones += pat[i];
+        double rate = (double)ones / (double)n;
+        if (rate < 0.2 || rate > 0.8) {
+            printf("   NG D=5 K=16（有効域の端）で成立率が %.3f\n", rate);
+            ng = 1;
+        }
+        if (ng) { printf("FAIL: ctx の K 上限\n"); return 1; }
+        printf("   OK  bp_ctx_max_k は 2^(D-1)、有効域の端 D=5 K=16 は生成できる\n");
+    }
+
     printf("== 文脈数制限 ctx: 共通サフィックス長の履歴では決まらない ==\n");
     // 設計上、近傍 D-j ビットは全文脈で共通なので情報を持たない。
     // よって h = D-j では標的が曖昧でなければならない。
