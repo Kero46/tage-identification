@@ -21,14 +21,51 @@ static void g_histd(uint8_t *p, size_t n, double a, double b, int c) { (void)b; 
 // S を増やすと衝突が起こる「可能性が高まる」実験であり、観測された劣化を
 // aliasing と断定するものではない（コード量も増えるため）。
 static void g_alias(uint8_t *p, size_t n, double a, double b, int c) { bp_gen_alias(p, n, (unsigned)a, (unsigned)b, c); }
+// 雑音注入 probe。--param D --param2 m。文脈数は構成上 2 固定なので K は取らない。
+static void g_ctxnoise(uint8_t *p, size_t n, double a, double b, int c) { bp_gen_ctx_noise(p, n, (unsigned)a, (unsigned)b, c); }
+
+// 掃引軸の名前。**--param / --param2 の意味はモードごとに違う**ので、CSV や
+// .meta.txt を単独で読んだときに何の軸なのかが分かるように名前を持たせる。
+// 位置と慣習で意味が決まっている状態は落とし穴 15（CSV を位置で読む）と同種。
+// ここが単一の出所であり、sweep.py は --axes で問い合わせる（二重管理にしない）。
+static const char *axis_p1(const char *mode) {
+    if (!strcmp(mode, "dual"))     return "D1";
+    if (!strcmp(mode, "ctx"))      return "D";
+    if (!strcmp(mode, "ctxnoise")) return "D";
+    if (!strcmp(mode, "alias"))    return "S";
+    if (!strcmp(mode, "histd"))    return "D";
+    return "p1";
+}
+static const char *axis_p2(const char *mode) {
+    if (!strcmp(mode, "dual"))     return "D2";
+    if (!strcmp(mode, "ctx"))      return "K";
+    if (!strcmp(mode, "ctxnoise")) return "m";
+    if (!strcmp(mode, "alias"))    return "period";
+    if (!strcmp(mode, "histd"))    return "unused";
+    return "p2";
+}
 
 static void usage(const char *p) {
     fprintf(stderr,
-      "使い方: %s --mode <dual|ctx|alias|histd> [オプション]\n"
-      "  dual : --param D1  --param2 D2\n"
-      "  ctx  : --param D   --param2 K   (K = 文脈数)\n"
-      "  alias: --param S   --param2 p   (S = 分岐サイト数 2,4,8,16,32,64 / p = 周期)\n"
-      "  histd: --param D   (奇数)\n"
+      "使い方: %s --mode <dual|ctx|ctxnoise|alias|histd> [オプション]\n"
+      "\n"
+      "  【モードごとの引数】--param / --param2 の意味はモードで違う。誤用しないこと。\n"
+      "  モード     --param      --param2        備考\n"
+      "  --------   ----------   -------------   --------------------------------\n"
+      "  dual       D1 (距離1)   D2 (距離2)      標的 = bit(D1前) XOR bit(D2前)\n"
+      "  ctx        D (距離)     K (文脈数)      K <= 2^(D-1) を強制。2 のべきに丸め\n"
+      "  ctxnoise   D (距離)     m (雑音の本数)  **文脈数は 2 固定。K は取らない**\n"
+      "  alias      S (サイト数) period (周期)   S は 2,4,8,16,32,64 のみ\n"
+      "  histd      D (距離、奇数)  未使用       \n"
+      "\n"
+      "  --axes       そのモードの軸名を表示して終了（p1_name / p2_name）\n"
+      "\n"
+      "  ctxnoise: 梯子の段の位置 L_i を求める（第2段 (a) の主手法）。\n"
+      "     ブロック = [雑音 m][識別ビット 1][共通サフィックス D-1][標的]\n"
+      "     距離 D より古い側の雑音が「D より長いテーブルだけ」を選択的に潰す。\n"
+      "     成功(D) <=> ∃i: D <= L_i <= D + W_i。成功区間の上端が段の履歴長。\n"
+      "     **m は W(~10) を超えないと何も潰れない**（m=0 に退化する）。m~20 を使う。\n"
+      "     **m=0 は ctx K=2 と同じ構造**で、第1段の 66/67 境界が再現するはず。\n"
       "  --pad <P>    1 要素につき常に同じ方向に分岐する詰め物分岐を P 本挿入する\n"
       "               (0,1,2,4)。予測ミスを増やさず履歴スロットだけを消費するので、\n"
       "               履歴の単位を切り分けられる。--sites との併用は不可\n"
@@ -49,7 +86,7 @@ int main(int argc, char **argv) {
     memset(&c, 0, sizeof(c));
     c.trials = 7; c.reps = 48; c.warmup = 8; c.seed = 1;
     const char *mode = NULL;
-    int want_fe = 0;
+    int want_fe = 0, want_axes = 0;
     unsigned sites = 0;                 // 0 なら単一サイト
     int pads = -1, pad_dir = 1;         // pads<0 なら詰め物なし
 
@@ -67,11 +104,21 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--sites")  && i+1 < argc) sites = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pad")    && i+1 < argc) pads = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pad-dir") && i+1 < argc) pad_dir = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--axes"))                 want_axes = 1;
         else if (!strcmp(argv[i], "--frontend"))             want_fe = 1;
         else if (!strcmp(argv[i], "--csv"))                  c.csv = 1;
         else { usage(argv[0]); return 2; }
     }
     if (!mode) { usage(argv[0]); return 2; }
+
+    // 掃引軸の名前を問い合わせる経路。sweep.py がこれを読んで CSV と .meta.txt に
+    // p1_name / p2_name を書く。**軸の意味の出所をここ一箇所に保つ**ため、
+    // 解析側に同じ表を持たせない（二重管理は必ずずれる）。
+    if (want_axes) {
+        printf("p1_name=%s\n", axis_p1(mode));
+        printf("p2_name=%s\n", axis_p2(mode));
+        return 0;
+    }
 
     static unsigned nsites;
     if      (!strcmp(mode,"alias")) {
@@ -106,12 +153,77 @@ int main(int argc, char **argv) {
     }
     else if (!strcmp(mode,"dual"))  c.gen = g_dual;
     else if (!strcmp(mode,"ctx"))   c.gen = g_ctx;
+    else if (!strcmp(mode,"ctxnoise")) c.gen = g_ctxnoise;
     else if (!strcmp(mode,"histd")) c.gen = g_histd;
     else { usage(argv[0]); return 2; }
 
     if (!strcmp(mode,"histd") && ((unsigned)c.p1 % 2) == 0) {
         fprintf(stderr, "エラー: histd は D が奇数でなければならない\n");
         return 2;
+    }
+    // ctxnoise の引数検証。--param2 は m（雑音の本数）であって K ではない。
+    //
+    // **文脈数は構成上 2 に固定である**（識別ビット 1 個）。K を渡す経路は存在しない
+    // ので「K を拒否する」検査は書けないが、代わりに m の範囲を検証する。
+    // 誤って K のつもりで大きな値を渡すと m が過大になり、ブロック長が
+    // パターン長を超えて 1 ブロックも生成されなくなる（黙って純ランダムに近い
+    // 系列を測ることになる）。これは落とし穴 24 と同じ失敗様式なので拒否する。
+    if (!strcmp(mode,"ctxnoise")) {
+        unsigned D = (unsigned)c.p1, m = (unsigned)c.p2;
+        if (D < 1) {
+            fprintf(stderr, "エラー: ctxnoise は D >= 1 が必要（指定 D=%u）\n", D);
+            return 2;
+        }
+        size_t blk = (size_t)m + D + 1;
+        size_t blocks = blk ? bp_pat_len / blk : 0;
+        // **構造的に不可能な場合はエラー**にする。ブロックが数個も取れないなら、
+        // 系列はほぼ末尾の埋め草（純ランダム）になり、黙って別のものを測ることに
+        // なる（落とし穴 24 と同じ失敗様式）。K のつもりで大きな値を渡すとここに来る。
+        if (blocks < 8) {
+            fprintf(stderr,
+                "エラー: ctxnoise の D=%u m=%u ではブロック長 %zu に対し patlen %zu が"
+                "短すぎる（ブロック %zu 個）\n"
+                "  **--param2 は m（雑音の本数）であって K（文脈数）ではない。**\n"
+                "  文脈数は構成上 2 固定である。K のつもりで大きな値を渡していないか"
+                "確認すること。\n",
+                D, m, blk, bp_pat_len, blocks);
+            return 2;
+        }
+        // **測定に足りない場合は警告**にとどめる。閾値で拒否すると小さな patlen の
+        // 動作確認ができなくなる（検査スクリプトが実際に落ちた）。
+        // 潰したいテーブルの文脈数 2^(W+2) を踏むには文脈あたり 10 ブロック必要で、
+        // W~10 なら 20480 ブロック（仕様 §4.1 の制約 4）。
+        if (blocks < 1024)
+            fprintf(stderr,
+                "警告: ctxnoise の D=%u m=%u でブロックが %zu 個しかない"
+                "（測定には 20480 個程度必要）。\n"
+                "  patlen を上げること（目安 2097152、仕様 §4.1 の制約 4）。\n",
+                D, m, blocks);
+    }
+    // ctx の文脈数の上限。識別ビット j = log2(K) は標的から見て距離 D..D-j+1 に
+    // 置くので j <= D-1 が必要、すなわち K <= 2^(D-1)。
+    //
+    // **以前はこれを検証しておらず、生成器が黙って純ランダム系列を返していた。**
+    // K 掃引すると上限を超えた点で diff が 0 に落ちるので「容量の限界」に見える。
+    // 実測で D=5, K=32 のとき test_ns が純ランダムの飽和値 3.38 になり、
+    // K=16→32 が劣化開始点に見えた（実験ノート 2026-08-04 続報 4）。
+    // 小さい D ほど早く当たるため、梯子の短履歴側の段がまるごと偽物になる。
+    if (!strcmp(mode,"ctx")) {
+        unsigned D = (unsigned)c.p1, K = (unsigned)c.p2;
+        if (K < 2) K = 2;
+        unsigned kmax = bp_ctx_max_k(D);
+        if (kmax == 0 || K > kmax) {
+            fprintf(stderr,
+                "エラー: ctx は D=%u に対し K <= 2^(D-1) = %u でなければならない"
+                "（指定 K=%u）\n"
+                "  識別ビット j=log2(K) は標的から見て距離 D..D-j+1 に置くので\n"
+                "  j <= D-1 が必要である。範囲外の K では文脈を表現できない。\n"
+                "  以前はここを検証せず、生成器が黙って純ランダム系列を返していた。\n"
+                "  K 掃引に偽の劣化が現れ、容量の限界と誤読する（仕様 §4.1）。\n"
+                "  掃引の上限は min(8192, 2^(D-1)) にすること。\n",
+                D, kmax, K);
+            return 2;
+        }
     }
     // --sites: パターン要素を S 個の分岐サイト（異なる PC）に分散して実行する。
     // 生成する系列は変わらない。変わるのは要素あたりのループ制御分岐の本数で、

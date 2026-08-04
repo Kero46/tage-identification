@@ -10,7 +10,10 @@
 //
 // モードの使い分け:
 //   cross  分岐間相関。グローバル履歴の効果を評価できる（推奨）
-//          パラメータ d に対し、必要なグローバル履歴長は 2d+1 分岐である
+//          パラメータ d に対し、標的が必要とする相関距離は 2d+1 パターン要素
+//          である。**これは履歴長ではない。** 要素と分岐は 1 対 1 でなく、
+//          不成立分岐は履歴を消費しない（仕様 §3.2）。さらに cross の転移は
+//          容量側の制約を含むため履歴長として報告しない（仕様 §3.4）
 //   histd  単一サイトの自己相関。ローカル履歴だけでも学習できるため、
 //          グローバル履歴の評価には使えない
 //   period 周期パターン。ローカル履歴でも学習可能な点に注意
@@ -28,11 +31,25 @@ static void g_random (uint8_t *p, size_t n, double a, double b, int c) { (void)a
 // 学習できるため、グローバル履歴の効果を見るにはこちらを使う。
 static void g_cross  (uint8_t *p, size_t n, double a, double b, int c) { (void)b; bp_gen_cross(p, n, (unsigned)a, c); }
 
+// 掃引軸の名前。**--param の意味はモードごとに違う**ので、CSV や .meta.txt を
+// 単独で読んだときに何の軸なのかが分かるように名前を持たせる（table_bench と同じ方針）。
+// 軸の意味の出所をここ一箇所に保ち、解析側に同じ表を持たせない。
+static const char *axis_p1(const char *mode) {
+    if (!strcmp(mode, "cross"))  return "d";
+    if (!strcmp(mode, "histd"))  return "D";
+    if (!strcmp(mode, "hist"))   return "D";
+    if (!strcmp(mode, "period")) return "N";
+    if (!strcmp(mode, "bias"))   return "p";
+    if (!strcmp(mode, "random")) return "unused";
+    return "p1";
+}
+static const char *axis_p2(const char *mode) { (void)mode; return "unused"; }
+
 static void usage(const char *p) {
     fprintf(stderr,
       "使い方: %s --mode <cross|histd|hist|period|bias|random> [オプション]\n"
       "  cross : 分岐間相関。グローバル履歴の評価に用いる（推奨）\n"
-      "          --param d に対し必要なグローバル履歴長は 2d+1 分岐\n"
+      "          --param d に対し相関距離は 2d+1 パターン要素（履歴長ではない）\n"
       "  histd : 単一サイトの自己相関。ローカル履歴でも学習可能な点に注意\n"
       "  --param <v>    D (histd/hist, histd は奇数) / d (cross) / N (period) / p (bias)\n"
       "  --param2 <v>   第2引数。第1段のどのモードも使わない（掃引ドライバが\n"
@@ -45,6 +62,7 @@ static void usage(const char *p) {
       "  --pair         test/control を同一プロセス内で交互に測る(推奨)\n"
       "  --patlen <n>   パターン長(分岐数)。短いと予測器が系列を記憶する\n"
       "  --frontend     フロントエンド停止サイクルも取る(多重化に注意)\n"
+      "  --axes         そのモードの軸名を表示して終了（p1_name / p2_name）\n"
       "  --csv          CSV 出力\n", p);
 }
 
@@ -53,7 +71,7 @@ int main(int argc, char **argv) {
     memset(&c, 0, sizeof(c));
     c.trials = 7; c.reps = 48; c.warmup = 8; c.seed = 1;
     const char *mode = NULL;
-    int want_fe = 0;
+    int want_fe = 0, want_axes = 0;
 
     for (int i = 1; i < argc; i++) {
         if      (!strcmp(argv[i], "--mode")    && i+1 < argc) mode = argv[++i];
@@ -66,11 +84,19 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--warmup")  && i+1 < argc) c.warmup = strtoull(argv[++i],0,10);
         else if (!strcmp(argv[i], "--trials")  && i+1 < argc) c.trials = strtoull(argv[++i],0,10);
         else if (!strcmp(argv[i], "--seed")    && i+1 < argc) c.seed   = strtoull(argv[++i],0,10);
+        else if (!strcmp(argv[i], "--axes"))                  want_axes = 1;
         else if (!strcmp(argv[i], "--frontend"))              want_fe = 1;
         else if (!strcmp(argv[i], "--csv"))                   c.csv = 1;
         else { usage(argv[0]); return 2; }
     }
     if (!mode) { usage(argv[0]); return 2; }
+
+    // 掃引軸の名前を問い合わせる経路（table_bench と同じ）。
+    if (want_axes) {
+        printf("p1_name=%s\n", axis_p1(mode));
+        printf("p2_name=%s\n", axis_p2(mode));
+        return 0;
+    }
 
     if      (!strcmp(mode,"cross"))  { c.gen = g_cross; c.kernel = bp_kernel_cross; }
     else if (!strcmp(mode,"histd"))  c.gen = g_histd;
