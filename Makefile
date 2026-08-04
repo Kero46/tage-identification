@@ -1,7 +1,7 @@
 # プロジェクト全体のビルド・確認
 DIRS = history_length table_structure
 
-.PHONY: all common $(DIRS) test verify sanity check calibrate clean
+.PHONY: all common $(DIRS) test verify verify-selfcheck sanity check calibrate clean
 all: $(DIRS)
 
 common:
@@ -14,20 +14,27 @@ $(DIRS): common
 test:
 	$(MAKE) -C common test
 
-# 条件分岐が cmov に化けていないかの確認。環境ごとに必須。
-verify: all
+# 機械語と出力形式の検査。環境ごとに必須。
+#   verify_selfcheck  検査そのものが陽性・陰性の両方向で動くこと（メタテスト）
+#   verify_branch     データ依存の条件分岐が全カーネルに期待数だけあること
+#   verify_csv        ベンチマークの CSV 列構成が仕様書 §2.3 から動いていないこと
+#   verify_sweep_csv  掃引ドライバの出力列（cross のみ派生列を持つ）
+verify: all verify-selfcheck
 	@env/verify_branch.sh history_length/hist_bench
 	@env/verify_branch.sh table_structure/table_bench
+	@env/verify_csv.sh history_length/hist_bench --mode random
+	@env/verify_csv.sh table_structure/table_bench --mode histd --param 3
+	@env/verify_sweep_csv.sh
 
-# 測定系が信号を検出できることの確認（陽性対照・陰性対照・ノイズ床）
+# 機械語検査の回帰検出。単体でも回せるようにしておく。
+verify-selfcheck:
+	@env/verify_selfcheck.sh
+
+# 測定系が分岐予測を測れていることの合否ゲート。
+# 陽性対照と陰性対照の時間比が閾値を下回ったら非零終了する。
+# 校正済みのパターン長があれば PATLEN=<n> make sanity で渡す。
 sanity: all
-	@echo "== 陽性対照: 予測可能な周期パターンは速いはず =="
-	@./history_length/hist_bench --mode period --param 10 --trials 3 --reps 16 2>/dev/null
-	@echo "== 陰性対照: 純ランダムは遅いはず =="
-	@./history_length/hist_bench --mode random --trials 3 --reps 16 2>/dev/null
-	@echo "== ノイズ床（帰無実験）=="
-	@tools/sweep.py history_length/hist_bench --mode histd --p1 15 \
-	    --trials 7 --reps 16 --null 2>/dev/null
+	@env/sanity.sh
 
 # 測定環境の確認(root 不要)
 check:

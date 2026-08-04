@@ -10,6 +10,7 @@
 #
 # 使い方: taskset -c 2 env/calibrate_patlen.sh
 BIN="history_length/hist_bench"
+DIR=$(dirname "$0")
 [ -x "$BIN" ] || { echo "$BIN がありません。make してください。"; exit 1; }
 
 TMP=$(mktemp)
@@ -18,16 +19,23 @@ trap 'rm -f "$TMP"' EXIT
 echo "測定中..."
 for L in 10 11 12 13 14 15 16 17 18 19 20; do
     N=$((1 << L))
+    # 列は名前で解決する。以前は位置（12 列目）で読んでおり、カウンタ追加で
+    # 列がずれた結果 scaled（常に 0）を校正値として扱っていた。
     R=$("$BIN" --mode random --patlen "$N" --trials 5 --reps 8 --csv 2>/dev/null \
-        | tail -n +2 | cut -d, -f12 | sort -n \
-        | awk '{a[n++]=$1} END{printf "%.3f", a[int(n/2)]}')
+        | awk -f "$DIR/csvcol.awk" -v COL=ns_per_patbranch | sort -n \
+        | awk '{a[n++]=$1} END{ if (n==0) printf "nan"; else printf "%.3f", a[int(n/2)]}')
     echo "$L $N $R" >> "$TMP"
 done
 
 # 全点を取ってから最大値と比較して判定する（逐次比較ではノイズでぶれる）
 echo
 echo "パターン長        random の ns/分岐   判定"
-awk '{v[NR]=$3; l[NR]=$1; n[NR]=$2; if ($3>m) m=$3} END {
+awk '{v[NR]=$3; l[NR]=$1; n[NR]=$2; if ($3+0>m) m=$3+0} END {
+    if (m <= 0) {
+        print "NG: 測定値が取れませんでした（校正不能）。"
+        print "    バイナリと CSV の列位置を確認すること。"
+        exit 1
+    }
     for (i=1; i<=NR; i++) {
         r = v[i]/m
         note = (r < 0.90) ? sprintf("記憶化の疑い(飽和値の%.0f%%)", r*100) : "飽和域"
