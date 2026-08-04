@@ -7,10 +7,16 @@
 
 // パターン長の既定値。
 // 【重要】パターンは反復して実行されるため、短いと予測器が系列全体を記憶する。
-// 実測ではパターン長 1KB のとき純ランダム系列でも約 0.82 ns/分岐（=記憶済み）、
-// 16KB で約 4.2 ns/分岐であった。記憶化領域に入ると対照系列も予測可能になり
-// 差分法が壊れる。必要な長さは予測器の容量に依存するため機械ごとに校正が必要。
-//   env/calibrate_patlen.sh で校正すること。
+// 記憶化領域に入ると対照系列も予測可能になり差分法が壊れる。
+//
+// 必要な長さは予測器の容量に依存し、機械によって逆の判定になる。実測値:
+//   機械 A（Xeon 2.1GHz / コンテナ / asm goto 移行前）: 1KB 1.4、16KB 以降 4.9（飽和）
+//   機械 B（Apple M1 Pro / macOS / asm goto 版）      : 1KB 0.86、16KB 2.98（境界）、
+//                                                       32KB 以降 3.15〜3.38（飽和）
+// 同じ 16KB が A では飽和域、B では境界である。既定値 2^16 は「多くの場合
+// 足りる」だけの値であって、校正の代わりにはならない。
+//   env/calibrate_patlen.sh で機械ごとに校正し --patlen で明示すること。
+//   全点と出典は history_length/results/calibration.txt と仕様書 §1.6。
 #ifndef BP_PAT_LEN_DEFAULT
 #define BP_PAT_LEN_DEFAULT (1u << 16)
 #endif
@@ -63,6 +69,12 @@ uint64_t bp_kernel_single(const uint8_t *pat, size_t n, uint64_t reps, void *ctx
 uint64_t bp_kernel_cross(const uint8_t *pat, size_t n, uint64_t reps, void *ctx);
 // S サイト（S は 2,4,8,16,32,64）。ctx に unsigned* で S を渡す。
 uint64_t bp_kernel_sites(const uint8_t *pat, size_t n, uint64_t reps, void *ctx);
+
+// 詰め物分岐つき。1 要素につき常に同じ方向に分岐する条件分岐を pads 本挿入する。
+// 予測ミスを増やさず履歴スロットだけを消費するので、履歴の単位を切り分けられる。
+// pads は 0,1,2,4。dir は方向（1 で常に成立、0 で常に不成立）。
+typedef struct { unsigned pads, dir; } bp_pad_cfg;
+uint64_t bp_kernel_pad(const uint8_t *pat, size_t n, uint64_t reps, void *ctx);
 
 // ------------------------------------------------------------------ 試行ループ
 typedef void (*bp_gen_fn)(uint8_t *pat, size_t n, double p1, double p2, int control);
