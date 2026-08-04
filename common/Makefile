@@ -7,7 +7,7 @@ libbp.a: $(OBJS)
 
 # パターン生成器の性質検査（必要履歴長の下限を含む）
 bp_selftest: selftest.c libbp.a
-	$(CC) $(CFLAGS) -o $@ selftest.c libbp.a
+	$(CC) $(CFLAGS) -o $@ selftest.c libbp.a -lm
 
 %.o: %.c bp.h
 	$(CC) $(CFLAGS) -c -o $@ $<
