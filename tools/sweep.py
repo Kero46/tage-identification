@@ -189,6 +189,25 @@ def split_pair(rows, key):
 RANDOM_TOL_FRAC = 0.03
 
 
+# 測定中に他プロセスが CPU を食っていると反復のばらつきが跳ね上がる。実測で
+# load average 3.7 のとき安定していた ctx K=2 の境界測定が、load 20 では
+# 「境界なし」になった（標的あたりの値が ±19 まで暴れた。実験ノート続報 7）。
+# **コア固定ができない環境では負荷が支配的な誤差要因**なので、測定条件として記録する。
+LOAD_WARN = 5.0
+
+
+def load_avg():
+    """1/5/15 分の load average。取得できない環境では None。"""
+    try:
+        return os.getloadavg()
+    except (OSError, AttributeError):
+        return None
+
+
+def fmt_load(la):
+    return "取得不可" if la is None else " ".join(f"{v:.2f}" for v in la)
+
+
 def query_axes(binary, mode):
     """ベンチマークに軸名を問い合わせる（`--axes`）。
 
@@ -273,7 +292,7 @@ def noise_floor(binary, mode, p1, p2, args):
 
 
 def write_meta(path, args, binary, nf=float("nan"), sat=float("nan"),
-               p1_name="p1", p2_name="p2"):
+               p1_name="p1", p2_name="p2", load_start=None):
     """再現に必要な環境情報と、判定に使った規則・ノイズ床を残す。
 
     判定規則の版とノイズ床を残す理由: significant 列は判定式に依存するので、
@@ -322,6 +341,11 @@ def write_meta(path, args, binary, nf=float("nan"), sat=float("nan"),
                  " ns/分岐（帰無実験）\n")
         fh.write(f"random_sat={'測定せず' if sat != sat else f'{sat:.4f}'}"
                  " ns/要素（純ランダム飽和値。意図せぬ純ランダムの検査基準）\n")
+        # 測定条件としての負荷。コア固定ができない環境では支配的な誤差要因なので、
+        # 測定の前後で記録する（片方だけでは掃引中に負荷が変わった場合を見逃す）。
+        fh.write(f"load_avg_start={fmt_load(load_start)}"
+                 f"  load_avg_end={fmt_load(load_avg())}"
+                 f"（1/5/15 分。{LOAD_WARN} 超で警告。判定には使わない）\n")
         fh.write("ガバナ: "
                  f"{read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')}\n")
         fh.write(f"no_turbo: {read('/sys/devices/system/cpu/intel_pstate/no_turbo')}\n")
@@ -406,6 +430,19 @@ def main():
         # 読む側が \r を落とし忘れると黙って不一致になる（実際に踏んだ）。
         w = csv.DictWriter(fout, fieldnames=fields, lineterminator="\n")
         w.writeheader()
+
+    # 測定条件としての負荷。**停止はさせない**（判定材料にしない）が、記録して
+    # 後から結果を捨てられるようにする。
+    load_start = load_avg()
+    if load_start:
+        print(f"load average（開始時）: {fmt_load(load_start)}")
+        if load_start[0] > LOAD_WARN:
+            print(f"警告: load average が {load_start[0]:.2f} で "
+                  f"{LOAD_WARN} を超えています。反復のばらつきが大きくなり、"
+                  "境界判定が「境界なし」に落ちることがあります"
+                  "（実測: load 20 で ctx K=2 の 66/67 が消えた）。\n"
+                  "  他のアプリを止めてから測り直すことを推奨します。"
+                  "この警告で測定は止めません。", file=sys.stderr)
 
     # 軸名。CSV と .meta.txt を自己記述にする（p1/p2 が何なのかを単独で読めるように）。
     p1_name, p2_name = query_axes(args.binary, args.mode)
@@ -517,7 +554,8 @@ def main():
     if fout:
         fout.close()
         print(f"\n{args.out} に書き出しました")
-        write_meta(args.out, args, args.binary, nf, sat, p1_name, p2_name)
+        write_meta(args.out, args, args.binary, nf, sat, p1_name, p2_name,
+                   load_start)
 
 
 if __name__ == "__main__":

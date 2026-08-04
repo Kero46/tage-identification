@@ -28,6 +28,13 @@ REPS="${REPS:-16}"
 
 BIN=history_length/hist_bench
 DIR=$(dirname "$0")
+
+# 測定条件としての負荷。**合否の判定材料にはしない**（閾値を増やすとゲートが
+# 環境に依存してしまう）。ただしコア固定ができない環境では負荷が支配的な誤差要因
+# なので、比を読むときの材料として出す。実測で load 20 のとき境界測定が壊れた
+# （実験ノート続報 7）。
+LOAD=$(uptime 2>/dev/null | sed -n 's/.*load averages*: *//p')
+[ -n "$LOAD" ] && echo "load average: ${LOAD}（1/5/15 分。判定には使わない）"
 [ -x "$BIN" ] || { echo "NG: $BIN がありません。make してください。"; exit 1; }
 
 # 中央値の ns/分岐。列は名前で解決する（位置で読むと列追加で黙って壊れる）。
