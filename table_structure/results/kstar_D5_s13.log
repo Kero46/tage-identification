@@ -1,0 +1,11 @@
+純ランダム飽和値（table_structure/table_bench の histd --control）: 3.9079 ns/要素  これに近い test_ns は警告します
+ノイズ床（帰無実験）: 0.2784 ns/分岐  （これより小さい差は有意でない）
+
+      p1       p2   test_ns     iqr    ctl_ns     iqr   diff_ns    有意   異常
+       5        2    1.5170  0.4548    2.4522  0.5568   +0.9352   yes     
+       5        4    1.7645  0.3169    2.4730  0.6503   +0.7085   yes     
+       5        8    2.2244  0.0603    3.2703  0.6815   +1.0459   yes     
+       5       16    2.8774  0.2856    3.7580  0.6826   +0.8806   yes     
+
+table_structure/results/kstar_D5_s13.csv に書き出しました
+table_structure/results/kstar_D5_s13.csv.meta.txt に環境情報を記録しました

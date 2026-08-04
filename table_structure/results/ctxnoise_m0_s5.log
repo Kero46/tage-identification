@@ -1,0 +1,13 @@
+掃引軸: p1=D  p2=m（モード ctxnoise）
+純ランダム飽和値（table_structure/table_bench の histd --control）: 3.4781 ns/要素  これに近い test_ns は警告します
+ノイズ床（帰無実験）: 0.0362 ns/分岐  （これより小さい差は有意でない）
+
+      p1       p2   test_ns     iqr    ctl_ns     iqr   diff_ns    有意   異常
+      64        0    0.8883  0.0605    0.9319  0.1074   +0.0436    no     
+      65        0    0.8869  0.0809    0.9269  0.0895   +0.0400    no     
+      66        0    0.8961  0.0880    0.9352  0.0858   +0.0391    no     
+      67        0    1.0330  0.2571    0.9583  0.0686   -0.0747    no    !
+      68        0    1.0015  0.1252    0.9898  0.1743   -0.0117    no     
+
+table_structure/results/ctxnoise_m0_s5.csv に書き出しました
+table_structure/results/ctxnoise_m0_s5.csv.meta.txt に環境情報を記録しました

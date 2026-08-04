@@ -1,0 +1,14 @@
+日時: 2026-08-04T18:06:08
+CPU: 
+プラットフォーム: macOS-15.6.1-arm64-arm-64bit
+バイナリ: table_structure/table_bench
+モード: ctx
+p1=5 p2=2:16:x2 patlen=1048576
+trials=11 reps=48 warmup=8 seed=5
+sites=単一 pad=なし(dir=1)
+sig_rule=v2  (v2: diff > noise_floor かつ diff > max(test_iqr, ctl_iqr)。符号は片側条件として根拠あり、IQR 条件は経験的)
+noise_floor=0.2138 ns/分岐（帰無実験）
+random_sat=4.3576 ns/要素（純ランダム飽和値。意図せぬ純ランダムの検査基準）
+ガバナ: ?
+no_turbo: ?
+perf_event_paranoid: ?
