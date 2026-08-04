@@ -55,11 +55,17 @@
 ├── gem5/                 真値オラクルとしての検証（未整備）
 │   ├── configs/
 │   └── results/
-├── env/                  測定環境の構築・確認
+├── env/                  測定環境の構築と不変条件の検査
 │   ├── setup.sh          周波数固定・turbo 無効・カウンタ許可（要 root）
 │   ├── check.sh          測定前の環境確認
 │   ├── calibrate_patlen.sh  パターン長の校正
-│   └── verify_branch.sh  条件分岐が消えていないかの確認
+│   ├── sanity.sh         分岐予測を測れていることの合否ゲート
+│   ├── verify_branch.sh  データ依存分岐の生存とサイト数の検査
+│   ├── branch_check.awk  逆アセンブル解析（レジスタを追って分岐を数える）
+│   ├── verify_selfcheck.sh  機械語検査そのものの回帰検出
+│   ├── verify_csv.sh     ベンチマークの CSV 列構成のドリフト検出
+│   ├── verify_sweep_csv.sh  掃引ドライバの出力列のドリフト検出
+│   └── csvcol.awk        CSV 列を名前で解決する（位置読み禁止）
 ├── tools/                解析
 │   ├── sweep.py          掃引ドライバ（交互測定・ノイズ床・メタデータ記録）
 │   └── plot.py           作図
@@ -67,6 +73,7 @@
     ├── research_plan.md       研究計画書
     ├── implementation_spec.md 実装仕様書
     ├── measurement_guide.md   測定手順書（設計判断と落とし穴）
+    ├── stage1_handoff.md      第1段から第2段への引き継ぎ
     └── lab-notebook.md        実験ノート
 ```
 
@@ -76,20 +83,33 @@
 
 ## 必要なもの
 
-- Linux（`perf_event_open` を使用。取得できない環境でも時間計測のみで動作する）
-- GCC（カーネルの最適化属性に依存）
+**測定は Linux / x86-64 + GCC で行う。**
+
+- Linux — `perf_event_open` を使用。PMU が要る受け入れ基準（alias の `fe/br`・
+  `ipc` 併読）はこの環境でしか満たせない
+- x86-64 — 分岐命令を明示的に書いているため（`asm goto`）。aarch64 でも動く
+- GCC — ブロック複製を防ぐ最適化属性のため。**分岐の生存自体は属性ではなく
+  `asm goto` が保証**しており、複製の有無は `make verify` が検査する
 - Python 3（解析スクリプト。`matplotlib` は任意）
+
+macOS / arm64 / clang は副次対象。ビルド・実行・全検査は通り、**時間計測のみで
+パターン長の校正と第1段の掃引は成立する**（実証済み）。一方で PMU が無いため
+alias の受け入れ基準と環境メタデータの要件は満たせない。満たせない基準の一覧は
+`docs/implementation_spec.md` の §0.2 にある。
 
 ## ビルドと実行
 
 ```sh
 make            # 全ビルド
 make test       # 生成器の性質検査
-make verify     # 条件分岐が cmov に化けていないかの確認
+make verify     # 機械語（分岐の生存・サイト数）と CSV 列構成の検査
+make sanity     # 分岐予測を測れていることの合否ゲート（通らなければ非零終了）
 make check      # 測定環境の確認
 make calibrate  # パターン長の校正
-make sanity     # 陽性対照・陰性対照・ノイズ床
 ```
+
+`make test && make verify && make sanity` が通らない状態の測定値は使わない。
+検査が落ちたら、検査を緩めるのではなく実装を直す。
 
 測定の最小例：
 
@@ -113,10 +133,12 @@ taskset -c 2 tools/sweep.py history_length/hist_bench \
 | 測定基盤（生成器・計測・カーネル・試行ループ） | 実装済 |
 | 自己検査、環境スクリプト、掃引ドライバ | 実装済 |
 | 第1段の全モード | 実装済 |
-| 第2段の主要観測（距離掃引・二重相関・文脈数・aliasing） | 実装済 |
+| **第1段の測定（機械 B、時間計測のみ）** | **実施済**（`docs/stage1_handoff.md`） |
+| 第2段の主要観測（距離掃引・二重相関・文脈数・aliasing） | 実装済・未測定 |
 | 第2段：索引ビットの特定 | 未実装 |
 | 第2段：学習過程の観測 | 未実装 |
-| gem5 による検証 | 未整備 |
+| gem5 による検証（手法の妥当性確認） | **未整備（第1段の保留事項）** |
+| Linux / x86-64 + GCC での再現 | 未実施（第1段の保留事項） |
 
 ## 前提と限界
 
@@ -134,4 +156,5 @@ taskset -c 2 tools/sweep.py history_length/hist_bench \
 | [`docs/research_plan.md`](docs/research_plan.md) | 研究計画。三段構成と各段の論理 |
 | [`docs/implementation_spec.md`](docs/implementation_spec.md) | 実装仕様。API、モード仕様、受け入れ基準 |
 | [`docs/measurement_guide.md`](docs/measurement_guide.md) | 測定手順、設計判断、落とし穴 |
+| [`docs/stage1_handoff.md`](docs/stage1_handoff.md) | 第1段の結論と第2段への申し送り |
 | [`docs/lab-notebook.md`](docs/lab-notebook.md) | 実験ノート。判明した欠陥と修正の記録 |
