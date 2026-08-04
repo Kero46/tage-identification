@@ -61,12 +61,28 @@ void bp_gen_hist_ctx(uint8_t *pat, size_t n, unsigned D, unsigned K, int control
     uint8_t *suffix = (uint8_t *)malloc(suflen);
     uint8_t *tgt    = (uint8_t *)malloc(K);
     if (!suffix || !tgt) { free(suffix); free(tgt); return; }
-    // 共通サフィックス（全ブロックで同一。固定パターンなので学習可能）
-    for (unsigned i = 0; i < suflen; i++) suffix[i] = (uint8_t)bp_rnd_bit();
+    // 共通サフィックス（全ブロックで同一。固定パターンなので学習可能）。
+    // 独立乱数にすると、系列全体の成立率がこの引き方で決まってしまう。
+    // サフィックス長は D-j = D-log2(K) なので、K や D を変えるたびに成立率が
+    // 動き、K を掃引したときの絶対時間の基準線がずれる（差分法自体は test と
+    // control で成立率が一致するので成立するが、絶対値の比較ができない）。
+    // 半分を 1、半分を 0 にして混ぜることで成立率をほぼ 0.5 に安定させる。
+    // 全ブロックで同一である限り情報を持たないので、「近傍のビットでは文脈を
+    // 識別できない」という設計要件は保たれる（自己検査の曖昧さ判定が担保する）。
+    for (unsigned i = 0; i < suflen; i++) suffix[i] = (uint8_t)(i < suflen / 2 ? 1 : 0);
+    for (unsigned i = suflen; i > 1; i--) {      // Fisher-Yates
+        unsigned r = (unsigned)(bp_rnd_u64() % i);
+        uint8_t t = suffix[i - 1]; suffix[i - 1] = suffix[r]; suffix[r] = t;
+    }
     // 文脈ごとの標的値。独立乱数にすると K が小さいとき全文脈が同値になる縮退が
     // 起こり（K=4 なら 12.5%）、容量に関係なく予測可能になってしまう。
-    // 半分を 1、半分を 0 にして混ぜることで縮退を防ぎ、同時に成立率を K に
-    // 依らず 0.5 に固定する（K を変えたとき偏りが変わる交絡も避けられる）。
+    // 半分を 1、半分を 0 にして混ぜることで縮退を防ぐ。
+    //
+    // 【注意】これが固定するのは標的ビットの寄与だけである。系列全体の成立率は
+    // ブロックの大半を占める長さ D-j の共通サフィックスが支配するので、標的値を
+    // 均衡させても成立率は 0.5 にならない（実測 0.40〜0.72）。しかも
+    // j = log2(K) なので K を変えるとサフィックス長が変わり、成立率も動く。
+    // そこでサフィックス自体も均衡させる（下記）。
     for (unsigned k = 0; k < K; k++) tgt[k] = (uint8_t)(k < K / 2 ? 1 : 0);
     for (unsigned k = K; k > 1; k--) {          // Fisher-Yates
         unsigned r = (unsigned)(bp_rnd_u64() % k);
