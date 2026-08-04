@@ -1,0 +1,10 @@
+日時: 2026-08-04T03:25:36
+CPU: 
+プラットフォーム: macOS-15.6.1-arm64-arm-64bit
+バイナリ: history_length/hist_bench
+モード: period
+p1=2:2048:x2 p2=0 patlen=32768
+trials=15 reps=48 warmup=8 seed=1
+ガバナ: ?
+no_turbo: ?
+perf_event_paranoid: ?
