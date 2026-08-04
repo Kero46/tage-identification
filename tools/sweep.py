@@ -64,6 +64,10 @@ def invoke(binary, mode, p1, p2, args, pair=False, control=False):
         cmd += ["--patlen", str(args.patlen)]
     if args.frontend:
         cmd.append("--frontend")
+    if getattr(args, "sites", None):
+        cmd += ["--sites", str(args.sites)]
+    if getattr(args, "pad", None) is not None:
+        cmd += ["--pad", str(args.pad), "--pad-dir", str(args.pad_dir)]
     if pair:
         cmd.append("--pair")
     if control:
@@ -156,6 +160,9 @@ def write_meta(path, args, binary):
         fh.write(f"p1={args.p1} p2={args.p2} patlen={args.patlen or '既定'}\n")
         fh.write(f"trials={args.trials} reps={args.reps} "
                  f"warmup={args.warmup} seed={args.seed}\n")
+        fh.write(f"sites={args.sites or '単一'} "
+                 f"pad={'なし' if args.pad is None else args.pad}"
+                 f"(dir={args.pad_dir})\n")
         fh.write("ガバナ: "
                  f"{read('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor')}\n")
         fh.write(f"no_turbo: {read('/sys/devices/system/cpu/intel_pstate/no_turbo')}\n")
@@ -178,6 +185,14 @@ def main():
     ap.add_argument("--frontend", action="store_true",
                     help="フロントエンド停止サイクルも取る（多重化に注意）。"
                          "サイト数を変える実験では併用を推奨")
+    ap.add_argument("--sites", type=int, default=None,
+                    help="パターン要素を S 個の分岐サイトに分散して実行する"
+                         "（2,4,8,16,32,64）。履歴の単位を確かめる実験用")
+    ap.add_argument("--pad", type=int, default=None,
+                    help="1 要素あたりの予測可能な詰め物分岐の本数（0,1,2,4）。"
+                         "履歴の単位を切り分ける実験用")
+    ap.add_argument("--pad-dir", type=int, default=1,
+                    help="詰め物の分岐方向（1=常に成立, 0=常に不成立）")
     ap.add_argument("--trials", type=int, default=7)
     ap.add_argument("--reps", type=int, default=48)
     ap.add_argument("--warmup", type=int, default=8)
@@ -203,10 +218,19 @@ def main():
     fields = ["p1", "p2", "test_ns", "test_iqr", "ctl_ns", "ctl_iqr",
               "diff_ns", "significant", "test_mpb", "ctl_mpb", "diff_mpb",
               "test_ipc", "ctl_ipc", "test_fe_per_br", "ctl_fe_per_br"]
+    # cross の p1 は d であり、必要なグローバル履歴長は 2d+1 分岐である（d ではない）。
+    # A と B が交互に実行されるため。換算を解析者任せにすると解釈を誤るので、
+    # 派生列として出す。他のモードでは p1 の意味が違い 2*p1+1 に意味が無いため、
+    # 列そのものを出さない（意味を持たない数値を並べない）。
+    cross_mode = args.mode == "cross"
+    if cross_mode:
+        fields.insert(1, "hist_len_lower")
     w = fout = None
     if args.out:
         fout = open(args.out, "w", newline="")
-        w = csv.DictWriter(fout, fieldnames=fields)
+        # 行終端を LF に固定する。csv モジュールの既定は CRLF で、位置や文字列で
+        # 読む側が \r を落とし忘れると黙って不一致になる（実際に踏んだ）。
+        w = csv.DictWriter(fout, fieldnames=fields, lineterminator="\n")
         w.writeheader()
 
     nf = float("nan")
@@ -215,7 +239,10 @@ def main():
         print(f"ノイズ床（帰無実験）: {nf:.4f} ns/分岐"
               "  （これより小さい差は有意でない）\n")
 
-    hdr = f"{'p1':>8} {'p2':>8} {'test_ns':>9} {'iqr':>7}"
+    hdr = f"{'p1':>8}"
+    if cross_mode:
+        hdr += f" {'2d+1':>6}"
+    hdr += f" {'p2':>8} {'test_ns':>9} {'iqr':>7}"
     if args.no_control:
         hdr += f" {'ipc':>6} {'fe/br':>9}"
     if not args.no_control:
@@ -230,7 +257,10 @@ def main():
                 mm, _ = stats([float(r[MPB]) for r in rows])
                 ipc, _ = stats([float(r[IPC]) for r in rows])
                 fe = fe_per_branch(rows)
-                print(f"{p1:>8g} {p2:>8g} {tm:>9.4f} {ti:>7.4f} "
+                lead = f"{p1:>8g}"
+                if cross_mode:
+                    lead += f" {2 * p1 + 1:>6g}"
+                print(f"{lead} {p2:>8g} {tm:>9.4f} {ti:>7.4f} "
                       f"{ipc:>6.3f} {fe:>9.5f}")
                 row = dict(p1=p1, p2=p2, test_ns=tm, test_iqr=ti, ctl_ns="",
                            ctl_iqr="", diff_ns="", significant="",
@@ -245,7 +275,10 @@ def main():
                 cm, ci = stats(cv)
                 diff = cm - tm
                 sig = "yes" if (diff == diff and nf == nf and abs(diff) > nf) else "no"
-                print(f"{p1:>8g} {p2:>8g} {tm:>9.4f} {ti:>7.4f} "
+                lead = f"{p1:>8g}"
+                if cross_mode:
+                    lead += f" {2 * p1 + 1:>6g}"
+                print(f"{lead} {p2:>8g} {tm:>9.4f} {ti:>7.4f} "
                       f"{cm:>9.4f} {ci:>7.4f} {diff:>+9.4f} {sig:>5}")
                 ti_ipc, _ = stats([float(r[IPC]) for r in rows if r["control"] == "0"])
                 ci_ipc, _ = stats([float(r[IPC]) for r in rows if r["control"] == "1"])
@@ -258,6 +291,9 @@ def main():
                                [r for r in rows if r["control"] == "0"]),
                            ctl_fe_per_br=fe_per_branch(
                                [r for r in rows if r["control"] == "1"]))
+            if cross_mode:
+                # 必要なグローバル履歴長の下限（分岐数）。cross の p1=d に対し 2d+1。
+                row["hist_len_lower"] = 2 * p1 + 1
             if w:
                 w.writerow(row)
 
