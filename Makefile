@@ -18,13 +18,16 @@ test:
 #   verify_selfcheck  検査そのものが陽性・陰性の両方向で動くこと（メタテスト）
 #   verify_branch     データ依存の条件分岐が全カーネルに期待数だけあること
 #   verify_csv        ベンチマークの CSV 列構成が仕様書 §2.3 から動いていないこと
-#   verify_sweep_csv  掃引ドライバの出力列（cross のみ派生列を持つ）
+#   verify_sweep_csv  掃引ドライバの出力列（cross のみ派生列を持つ）と判定式
+#   verify_boundary   境界検出ツールの自己検査（実測データの回帰を含む）
 verify: all verify-selfcheck
 	@env/verify_branch.sh history_length/hist_bench
 	@env/verify_branch.sh table_structure/table_bench
 	@env/verify_csv.sh history_length/hist_bench --mode random
 	@env/verify_csv.sh table_structure/table_bench --mode histd --param 3
 	@env/verify_sweep_csv.sh
+	@env/verify_boundary.sh
+	@env/verify_cli_reject.sh
 
 # 機械語検査の回帰検出。単体でも回せるようにしておく。
 verify-selfcheck:
